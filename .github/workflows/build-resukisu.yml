@@ -1,1 +1,119 @@
+name: Build evergo ReSukiSU Kernel
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+env:
+  # 内核源码仓库（如需换成自己的 fork，改这里）
+  KERNEL_REPO: https://github.com/szh319/android_kernel_xiaomi_mt6833_evergo
+  KERNEL_BRANCH: main
+  DEFCONFIG: evergo_defconfig
+  # ReSukiSU 官方 setup 脚本
+  KSU_SETUP: https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh
+
+jobs:
+  build:
+    name: Build Kernel with ReSukiSU (kprobes mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang lld libssl-dev libelf-dev flex bison bc \
+            curl git git-lfs gnupg gperf imagemagick liblz4-tool \
+            libncurses6 libncurses5-dev libxml2 libxml2-utils lzop \
+            pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            gcc-aarch64-linux-gnu
+
+      - name: Set swap to 10G
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH "$KERNEL_REPO" kernel
+          cd kernel
+          git log -1 --format="Kernel source commit: %H %s"
+
+      - name: Setup ReSukiSU
+        run: |
+          cd kernel
+          curl -LSs "$KSU_SETUP" | bash
+
+      - name: Enable ReSukiSU in defconfig
+        run: |
+          cd kernel
+          {
+            echo ""
+            echo "# ReSukiSU"
+            echo "CONFIG_KSU=y"
+          } >> arch/arm64/configs/$DEFCONFIG
+          tail -n 5 arch/arm64/configs/$DEFCONFIG
+
+      - name: Build kernel
+        run: |
+          cd kernel
+          make -j$(nproc) O=out \
+            CC=clang \
+            LD=ld.lld \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=aarch64-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LLVM_IAS=1 \
+            KCFLAGS="--target=aarch64-linux-gnu \
+                     -Wno-unused-but-set-variable \
+                     -Wno-implicit-function-declaration \
+                     -Wno-unused-variable -Wno-unused-function -Wno-unused-label" \
+            $DEFCONFIG
+          make -j$(nproc) O=out \
+            CC=clang \
+            LD=ld.lld \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=aarch64-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LLVM_IAS=1 \
+            KCFLAGS="--target=aarch64-linux-gnu \
+                     -Wno-unused-but-set-variable \
+                     -Wno-implicit-function-declaration \
+                     -Wno-unused-variable -Wno-unused-function -Wno-unused-label"
+          echo "=== Build output ==="
+          ls -la out/arch/arm64/boot/
+
+      - name: Package AnyKernel3 zip
+        run: |
+          cd kernel
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          elif [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          else
+            echo "ERROR: no kernel image found!" && exit 1
+          fi
+          cd AnyKernel3
+          sed -i 's/device\.name1=.*/device.name1=evergo/' anykernel.sh
+          sed -i '/device\.name[2-5]=.*/d' anykernel.sh
+          sed -i 's/kernel\.string=.*/kernel.string=evergo 4.14 + ReSukiSU/' anykernel.sh
+          sed -i 's/BLOCK=.*/BLOCK=boot/' anykernel.sh
+          sed -i 's/IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=auto/' anykernel.sh
+          zip -r9 "../evergo-resukisu-$(date +%Y%m%d).zip" .
+          cd ..
+          ls -la evergo-*.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergo-resukisu-kernel
+          path: kernel/evergo-*.zip
