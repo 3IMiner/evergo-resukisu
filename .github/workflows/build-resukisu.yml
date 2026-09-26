@@ -62,7 +62,7 @@ jobs:
       - name: Build kernel
         run: |
           cd kernel
-          make -j$(nproc) O=out \
+          make -j$(nproc) O=out ARCH=arm64 SUBARCH=arm \
             CC=clang \
             LD=ld.lld \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -75,7 +75,7 @@ jobs:
                      -Wno-implicit-function-declaration \
                      -Wno-unused-variable -Wno-unused-function -Wno-unused-label" \
             $DEFCONFIG
-          make -j$(nproc) O=out \
+          make -j$(nproc) O=out ARCH=arm64 SUBARCH=arm \
             CC=clang \
             LD=ld.lld \
             CLANG_TRIPLE=aarch64-linux-gnu- \
